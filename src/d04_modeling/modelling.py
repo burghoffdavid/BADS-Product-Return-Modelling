@@ -63,7 +63,7 @@ from lightgbm import LGBMClassifier
 from scipy.stats import randint as sp_randint
 from scipy.stats import uniform as sp_uniform
 
-
+from catboost import CatBoostClassifier
 
 import warnings
 
@@ -261,17 +261,64 @@ def report(clf, x_train, y_train, x_test, y_test,
     
     print(classification_report(y_test, test_predictions,
                                 target_names=confusion_labels))
+
+    cost_matrix = calc_custom_cost_score(y_test.values, test_predictions, list(x_test['item_price']), matrix = True)
+
+    # Calculate calibration using calibration_curve function
+    prob_true, prob_pred = calibration_curve(y_test, y_probs, n_bins = 20)
+    # Calculate Bayes optimal threshold
+    threshold_bayes = (cost_matrix[1][0]               # C(b,G)
+                        /(cost_matrix[1][0]             # C(b,G)
+                            +cost_matrix[0][1])).round(5) # C(g,B)
+    
+    #Find optimal cutoff based on random cutoff values
+    possible_cutoffs = np.arange(0.0, 1.0, 0.001)
+    costs = {}
+    for cutoff in possible_cutoffs:
+        pred = np.where(y_probs >= cutoff, 1, 0)
+        costs[cutoff] = (calc_custom_cost_score(y_test.values, pred, list(x_test['item_price'])))
+        
+    threshold_empiric = min(costs, key=costs.get)
+    
+    # Compare Thresholds
+    pred_default = np.where(y_probs >= 0.5, 1, 0) # 0.5 is the default cut-off, equivalant to y_pred from above
+    pred_bayes= np.where(y_probs >= threshold_bayes, 1, 0) # Using the cut-off defined by the cost-minimal threshold function
+    pred_empiric = np.where(y_probs >= threshold_empiric, 1 , 0)# Empric cut-off
+    
+    err_cost_default = test_avg_cost
+    err_cost_cost_bayes = calc_custom_cost_score(y_test.values,pred_bayes, list(x_test['item_price']))
+    err_cost_empiric = calc_custom_cost_score(y_test.values,pred_empiric, list(x_test['item_price']))
+    
+    accurracy_default = accuracy_score(y_test, pred_default)
+    accuracy_bayes = accuracy_score(y_test, pred_bayes)
+    accuracy_empiric = accuracy_score(y_test, pred_empiric)
+    
+    # save best cutoff
+    cutoffs = {0.5 : err_cost_default,
+                threshold_bayes : err_cost_cost_bayes,
+                threshold_empiric : err_cost_empiric   
+                }
+    best_cutoff = min(cutoffs, key=cutoffs.get)
+    best_err_cost = cutoffs[best_cutoff]
+    # Compare Cutoffs
+    table_data = [
+        ['', 'Default Cutoff', ' cost-minimal Bayes cutoff', 'Empric minimal cutoff'],
+        ['Test Cutoff Threshold', 0.5, threshold_bayes, threshold_empiric],
+        ['Test Error Cost', err_cost_default, err_cost_cost_bayes, err_cost_empiric],
+        ['Test Accuracy', accurracy_default, accuracy_bayes, accuracy_empiric]
+    ]
+    print(tabulate(table_data, headers = 'firstrow'))
+
     if verbose:
              
         print("\n================================> COST-SENSITIVE EVALUTATION <=====================================")
 
-        cost_matrix = calc_custom_cost_score(y_test.values, test_predictions, list(x_test['item_price']), matrix = True)
+        
         
         # Calibration curve
         plt.rcParams["figure.figsize"] = (12,6)
 
-        # Calculate calibration using calibration_curve function
-        prob_true, prob_pred = calibration_curve(y_test, y_probs, n_bins = 20)
+        
 
         # Plot results
         plt.plot(prob_pred, prob_true, marker = '.', label = clf.__class__.__name__)  
@@ -284,48 +331,7 @@ def report(clf, x_train, y_train, x_test, y_test,
         
         print("------------------------------------------------------------------------------------------")
     
-        # Calculate Bayes optimal threshold
-        threshold_bayes = (cost_matrix[1][0]               # C(b,G)
-                           /(cost_matrix[1][0]             # C(b,G)
-                             +cost_matrix[0][1])).round(5) # C(g,B)
         
-        #Find optimal cutoff based on random cutoff values
-        possible_cutoffs = np.arange(0.0, 1.0, 0.001)
-        costs = {}
-        for cutoff in possible_cutoffs:
-            pred = np.where(y_probs >= cutoff, 1, 0)
-            costs[cutoff] = (calc_custom_cost_score(y_test.values, pred, list(x_test['item_price'])))
-            
-        threshold_empiric = min(costs, key=costs.get)
-        
-        # Compare Thresholds
-        pred_default = np.where(y_probs >= 0.5, 1, 0) # 0.5 is the default cut-off, equivalant to y_pred from above
-        pred_bayes= np.where(y_probs >= threshold_bayes, 1, 0) # Using the cut-off defined by the cost-minimal threshold function
-        pred_empiric = np.where(y_probs >= threshold_empiric, 1 , 0)# Empric cut-off
-        
-        err_cost_default = test_avg_cost
-        err_cost_cost_bayes = calc_custom_cost_score(y_test.values,pred_bayes, list(x_test['item_price']))
-        err_cost_empiric = calc_custom_cost_score(y_test.values,pred_empiric, list(x_test['item_price']))
-        
-        accurracy_default = accuracy_score(y_test, pred_default)
-        accuracy_bayes = accuracy_score(y_test, pred_bayes)
-        accuracy_empiric = accuracy_score(y_test, pred_empiric)
-        
-        # save best cutoff
-        cutoffs = {0.5 : err_cost_default,
-                   threshold_bayes : err_cost_cost_bayes,
-                   threshold_empiric : err_cost_empiric   
-                    }
-        best_cutoff = min(cutoffs, key=cutoffs.get)
-        best_err_cost = cutoffs[best_cutoff]
-        # Compare Cutoffs
-        table_data = [
-            ['', 'Default Cutoff', ' cost-minimal Bayes cutoff', 'Empric minimal cutoff'],
-            ['Test Cutoff Threshold', 0.5, threshold_bayes, threshold_empiric],
-            ['Test Error Cost', err_cost_default, err_cost_cost_bayes, err_cost_empiric],
-            ['Test Accuracy', accurracy_default, accuracy_bayes, accuracy_empiric]
-        ]
-        print(tabulate(table_data, headers = 'firstrow'))
         
         print("\n================================> CONFUSION MATRICES <=====================================")
         #Compare default error cost and accuracy to bayes error cost and accuracy
@@ -534,7 +540,31 @@ def custom_cost_eval_lgbm(y_true, y_pred):
     
     score = calc_custom_cost_score(y_true, y_pred, prices)
     return ("Cost_Score", score, False)
+
+
+# Cat Boost requires a custom CostMetric Class to evaluate results
+class CostMetric:
     
+    @staticmethod
+    def get_profit(y_true, y_pred):
+        y_pred = np.where(y_pred >= 0.5 ,1, 0)
+        y_true = np.array(y_true)
+        costs = calc_custom_cost_score(y_true, y_pred, list(x_train['item_price']))
+        return costs
+    
+    def is_max_optimal(self):
+        return False # lower is better
+
+    def evaluate(self, approxes, target, weight):            
+        assert len(approxes) == 1
+        assert len(target) == len(approxes[0])
+        y_true = np.array(target).astype(int)
+        approx = approxes[0]
+        score = self.get_profit(y_true, approx)
+        return score, 1
+
+    def get_final_error(self, error, weight):
+        return error
 
 if __name__ == '__main__':
 
@@ -648,56 +678,11 @@ if __name__ == '__main__':
                                     x_test, y_test,
                                     importance_plot=True,
                                     feature_labels=feature_names,
-                                    confusion_labels=confusion_lbs)
+                                    confusion_labels=confusion_lbs,
+                                    verbose = False)
 
     # ## 3.2  Random Forests
 
-    ## define search space
-
-    # Number of trees in random forest
-    n_estimators = [int(x) for x in np.linspace(start = 200, stop = 2000, num = 10)]
-    # Number of features to consider at every split
-    max_features = ['auto', 'sqrt']
-    # Maximum number of levels in tree
-    max_depth = [int(x) for x in np.linspace(10, 110, num = 11)]
-    max_depth.append(None)
-    # Minimum number of samples required to split a node
-    min_samples_split = [2, 5, 10]
-    # Minimum number of samples required at each leaf node
-    min_samples_leaf = [1, 2, 4]
-    # Method of selecting samples for training each tree
-    bootstrap = [True, False]
-
-    # Create the random grid
-    random_grid = {'n_estimators': n_estimators,
-                'max_features': max_features,
-                'max_depth': max_depth,
-                'min_samples_split': min_samples_split,
-                'min_samples_leaf': min_samples_leaf,
-                'bootstrap': bootstrap}
-
-    rf = RandomForestClassifier(random_state = random_seed)
-
-    rf_random = RandomizedSearchCV(estimator = rf,
-                                param_distributions = random_grid,
-                                n_iter = 100,
-                                cv = 5,
-                                verbose=2,
-                                random_state=random_seed,
-                                n_jobs = -1, 
-                                scoring=custom_cost_scorer)
-
-    # execute search
-    rf_random.fit(x_train, y_train)
-    # summarize result
-    print('Best Score: %s' % rf_random.best_score_)
-    print('Best Hyperparameters: %s' % rf_random.best_params_)
-    rf_random.best_params_
-
-    # Save best params to txt
-    f = open('../../data/04_models/rf_random_best_params.txt','w')
-    f.write( str(rf_random.best_params_) )
-    f.close()
     # ### Training
 
     #Optimal Parameters were extemely overfitting, manually adjusted them to avoid overfitting 
@@ -716,37 +701,10 @@ if __name__ == '__main__':
                                                 x_test, y_test,
                                                 importance_plot=True,
                                                 feature_labels=feature_names,
-                                                confusion_labels=confusion_lbs)
+                                                confusion_labels=confusion_lbs,
+                                                verbose = False)
 
     # ## 3.3  XGBoost
-    # ### Randomized Search Parameter Tuning
-
-
-
-    param_grid = {'n_estimators': stats.randint(150, 1000),
-                'learning_rate': stats.uniform(0.01, 0.6),
-                'subsample': stats.uniform(0.3, 0.9),
-                'max_depth': [3, 4, 5, 6, 7, 8, 9],
-                'colsample_bytree': stats.uniform(0.5, 0.9),
-                'min_child_weight': [1, 2, 3, 4]
-                }
-
-    xgb_rand = RandomizedSearchCV(estimator = XGBClassifier(objective = "binary:logistic"),
-                                n_iter = 100,
-                                cv = 5,
-                                scoring = custom_cost_scorer,
-                                param_distributions = param_grid,
-                                verbose = 1,
-                                random_state = random_seed,
-                                refit = True,
-                                n_jobs = -1,)
-    xgb_rand.fit(x_train,y_train)
-    xgb_rand.best_params_
-
-    #Save best Params to txt
-    f = open('../../data/04_models/xgb_rand_best_params.txt','w')
-    f.write( str(xgb_rand.best_params_) )
-    f.close()
 
     # ### Training
     xgb_clf = XGBClassifier( 
@@ -773,46 +731,11 @@ if __name__ == '__main__':
                                 x_test, y_test,
                                 importance_plot=True,
                                 feature_labels=feature_names,
-                                confusion_labels=confusion_lbs)
+                                confusion_labels=confusion_lbs,
+                                verbose = False)
 
 
     # ## 3.4  LightGBM
-    # Create the random grid
-    random_grid ={'num_leaves': sp_randint(6, 50), 
-                'min_child_samples': sp_randint(100, 500), 
-                'min_child_weight': [1e-5, 1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4],
-                'subsample': sp_uniform(loc=0.2, scale=0.8), 
-                'colsample_bytree': sp_uniform(loc=0.4, scale=0.6),
-                'reg_alpha': [0, 1e-1, 1, 2, 5, 7, 10, 50, 100],
-                'reg_lambda': [0, 1e-1, 1, 5, 10, 20, 50, 100]}
-
-    # Initiate LGBM Classifier
-    gbm = LGBMClassifier(random_state=random_seed, max_depth=-1, n_jobs= -1)
-
-    # Initiate Randomized cross validating search
-    gbm_random = RandomizedSearchCV(estimator = gbm,
-                                param_distributions = random_grid,
-                                n_iter = 100,
-                                cv = 5,
-                                verbose=2,
-                                random_state=random_seed,
-                                n_jobs = -1, 
-                                scoring=custom_cost_scorer,
-                                refit=True
-                                )
-
-    # execute search
-    gbm_random.fit(x_train, y_train)
-
-    # summarize result
-    print('Best Score: %s' % gbm_random.best_score_)
-    print('Best Hyperparameters: %s' % gbm_random.best_params_)
-
-    #Save best Params to txt
-    f = open('../../data/04_models/gbm_random_best_params.txt','w')
-    f.write( str(gbm_random.best_params_) )
-    f.close()
-
 
     # ### Training
     lgbm_clf = LGBMClassifier(random_state=random_seed,
@@ -831,62 +754,10 @@ if __name__ == '__main__':
                                 x_test, y_test,
                                 importance_plot=True,
                                 feature_labels=feature_names,
-                                confusion_labels=confusion_lbs)
+                                confusion_labels=confusion_lbs,
+                                verbose = False)
 
-
-    # ### Discussion
-    # 
-    # Apart from a minor dip in true probabilities per bin, the LGBM Classifier also seems to be very well calibrated. Again, thanks to a custom evaluation metric and set, the Classifier is barely overfitting. Just like with XGBoost, using a cost-optimal threshold cut-off, the number of False Positives have been halved. Even with such a threshold, the model is still fairly accurate (0.661367 on the test set). 
-    # 
-    # Interestingly, this classifier deemed other features to be more important than the previous classifiers. It put more emphasize on numeric variables such as `user_account_age`, `number_of_items_in_order`, `user_age`, `item_price`, `delivery_days` and `total_orders_by_user`.
-    # 
-    # In summary, the LGBM seems to be a very promising Classifier, yielding fairly high accuracy while minimizing the costs.
-
-    # <a id="catboost"></a>
     # ## 3.5  CatBoost
-    # Cat boost performs better without One-hot encoding because it performs an internal categorical encoding that is similar to Leave One Out Encoding (LOOE). Therefore, we insert a different test and train set which has been prepared at the beginning of this notebook.
-
-
-
-    from catboost import CatBoostClassifier
-
-
-    # ### Find Optimal Hyper Parameters 
-
-
-
-    random_grid = {'depth':[3,1,2,6,4,5,7,8,9,10],
-            'iterations':[250,100,500,1000],
-            'learning_rate':[0.03,0.001,0.01,0.1,0.2,0.3], 
-            'l2_leaf_reg':[3,1,5,10,100],
-            'border_count':[32,5,10,20,50,100,200],}
-    cat = CatBoostClassifier(random_state=random_seed,)
-
-    cat_random = RandomizedSearchCV(estimator = cat,
-                                param_distributions = random_grid,
-                                n_iter = 100,
-                                cv = 5,
-                                verbose=2,
-                                random_state=random_seed,
-                                n_jobs = -1, 
-                                scoring=custom_cost_scorer,
-                                refit=True
-                                )
-
-    # execute search
-    cat_random.fit(x_train, y_train)
-    # summarize result
-    print('Best Score: %s' % cat_random.best_score_)
-    print('Best Hyperparameters: %s' % cat_random.best_params_)
-
-
-
-
-    #Save best Params to txt
-    f = open('../../data/04_models/gbm_random_best_params.txt','w')
-    f.write( str(cat_random.best_params_) )
-    f.close()
-
     catboost_clf = CatBoostClassifier(cat_features=categorical_columns_cat,
                                     learning_rate=0.03,
                                     l2_leaf_reg=10,
@@ -912,7 +783,8 @@ if __name__ == '__main__':
                                         x_test_cat, y_test_cat,
                                         importance_plot=True,
                                         feature_labels=f_labels,
-                                        confusion_labels=confusion_lbs)
+                                        confusion_labels=confusion_lbs,
+                                        verbose = False)
 
     # # 4.  Model Comparison and Evaluation
     report_list = [logit_report,                 
