@@ -3,6 +3,8 @@
 *by David Burghoff
 Student ID: 614500*
 
+Final Assignment of the course "Business Analytics and Data Science" (BADS) at Humboldt Universität Berlin.
+
 ## Introduction
 
 Online Shopping has been on a rise for some time now, even more so due to the current epidemic. While local stores had to close down, online shops could continue to sell their goods throughout the past year. The Digital Commerce 360 report estimates that ecommerce sales increased by 44% in 2020, compared to 2019 ([source](https://www.digitalcommerce360.com/2021/02/15/ecommerce-during-coronavirus-pandemic-in-charts/)). However, online shops have to face a cost that regular retailers do not have to calculate: the costs emerging from returns. Free shipping and return has been established as a standard in the industry, and while it certainly leads to many benefits for consumers, it also leads to some issues, both ecologically and economically.
